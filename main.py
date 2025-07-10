@@ -21,7 +21,7 @@ HTML('''
 ''')
 
 # Instalações silenciosas (Colab ou Local)
-!pip install -q pdfplumber tabulate openpyxl xlsxwriter PyPDF2 tqdm streamlit > /dev/null
+#!pip install -q pdfplumber tabulate openpyxl xlsxwriter PyPDF2 tqdm streamlit > /dev/null
 
 import os
 import shutil
