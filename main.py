@@ -1,62 +1,100 @@
-# app.py
-import streamlit as st
+# ✅ SCRIPT COMPLETO - PDF → Excel → Zip com Nome Personalizado (com PDFPlumber para Deploy Online)
+
+# Ocultar/Mostrar Código com botão (Javascript)
+from IPython.display import HTML
+HTML('''
+<script>
+  code_show=true; 
+  function code_toggle() {
+    if (code_show){
+      $('div.input').hide();
+    } else {
+      $('div.input').show();
+    }
+    code_show = !code_show
+  } 
+  $( document ).ready(code_toggle);
+</script>
+<form action="javascript:code_toggle()">
+  <input type="submit" value="🔧 Mostrar/Ocultar Código">
+</form>
+''')
+
+# Instalações silenciosas (Colab ou Local)
+!pip install -q pdfplumber tabulate openpyxl xlsxwriter PyPDF2 tqdm streamlit > /dev/null
+
 import os
+import shutil
+import logging
 from pathlib import Path
 import pandas as pd
 import numpy as np
-import shutil
-from zipfile import ZipFile
+import pdfplumber
+from tqdm.notebook import tqdm
 from datetime import datetime
-from io import BytesIO
-import camelot
+from zipfile import ZipFile
+import warnings
+warnings.simplefilter(action='ignore', category=FutureWarning)
+
 import PyPDF2
+from openpyxl import load_workbook
+from google.colab import files
 
-# Configuração do app
-st.set_page_config(page_title="Gerador de Consolidado", layout="centered")
-st.title("📄 Gerador de Consolidado ZIP a partir de PDF")
-
-st.markdown("Envie o PDF abaixo para gerar automaticamente as tabelas e o pacote consolidado.")
-
-# Diretórios temporários
-BASE_DIR = Path("temp_data")
+# Diretórios
+BASE_DIR = Path("/content/sample_pdfs")
 CONVERTED_DIR = BASE_DIR / "convertidos"
-BASE_DIR.mkdir(exist_ok=True)
-CONVERTED_DIR.mkdir(exist_ok=True)
+BASE_DIR.mkdir(parents=True, exist_ok=True)
+CONVERTED_DIR.mkdir(parents=True, exist_ok=True)
 
-# Funções
-def salvar_pdf(uploaded_file):
-    pdf_path = BASE_DIR / uploaded_file.name
-    with open(pdf_path, "wb") as f:
-        f.write(uploaded_file.getbuffer())
-    return pdf_path
+# Upload de PDFs
+def upload_pdfs(dest_dir: Path) -> list[Path]:
+    uploaded = files.upload()
+    pdf_paths = []
+    for fname in uploaded.keys():
+        if fname.lower().endswith(".pdf"):
+            src = Path("/content") / fname
+            dst = dest_dir / fname
+            shutil.move(str(src), str(dst))
+            pdf_paths.append(dst)
+    return pdf_paths
 
-def processar_pdf(pdf_path, output_dir):
-    tables = camelot.read_pdf(str(pdf_path), pages="all", flavor="lattice")
-    if not tables:
-        tables = camelot.read_pdf(str(pdf_path), pages="all", flavor="stream")
-    
+# Processamento com pdfplumber
+def processar_pdf(pdf_path: Path, output_dir: Path) -> list[Path]:
+    out_dir = output_dir / pdf_path.stem
+    out_dir.mkdir(parents=True, exist_ok=True)
     arquivos = []
-    for i, tabela in enumerate(tables, 1):
-        df = tabela.df.applymap(lambda x: x.strip() if isinstance(x, str) else x)
-        df.replace(["", "nan", "NaN", "NULL"], np.nan, inplace=True)
-        df.dropna(how="all", inplace=True)
-        df.fillna("", inplace=True)
-        df.reset_index(drop=True, inplace=True)
 
-        xlsx_path = output_dir / f"{pdf_path.stem}_tabela_{i}.xlsx"
-        df.to_excel(xlsx_path, index=False)
-        arquivos.append(xlsx_path)
+    with pdfplumber.open(str(pdf_path)) as pdf:
+        for i, page in enumerate(pdf.pages):
+            tables = page.extract_tables()
+            for j, table in enumerate(tables):
+                df = pd.DataFrame(table)
+                df.replace(["", "nan", "NaN", "NULL"], np.nan, inplace=True)
+                df.dropna(how="all", inplace=True)
+                df.fillna("", inplace=True)
+                df.reset_index(drop=True, inplace=True)
+                out_file = out_dir / f"{pdf_path.stem}_tabela_{i+1}_{j+1}.xlsx"
+                df.to_excel(out_file, index=False)
+                arquivos.append(out_file)
     return arquivos
 
-def consolidar_xlsx(arquivos, caminho_saida):
-    with pd.ExcelWriter(caminho_saida, engine="openpyxl") as writer:
-        for i, arq in enumerate(arquivos, 1):
-            df = pd.read_excel(arq)
-            df.to_excel(writer, sheet_name=f"Tabela_{i}", index=False)
+# Consolidação
+def consolidar_xlsx(arquivos: list[Path], arquivo_saida: Path):
+    with pd.ExcelWriter(arquivo_saida, engine="openpyxl") as writer:
+        for i, arquivo in enumerate(sorted(arquivos), 1):
+            try:
+                df = pd.read_excel(arquivo)
+                if df.empty or df.shape[1] < 2:
+                    continue
+                nome = f"Tabela_{i}"
+                df.to_excel(writer, sheet_name=nome[:31], index=False)
+            except:
+                continue
 
-def extrair_nome_amigavel(pdf_path):
-    with open(pdf_path, "rb") as f:
-        reader = PyPDF2.PdfReader(f)
+# Nome amigável
+def extrair_nome_amigavel(pdf_path: Path):
+    with open(pdf_path, "rb") as file:
+        reader = PyPDF2.PdfReader(file)
         texto = "\n".join(p.extract_text() for p in reader.pages if p.extract_text())
     idx = texto.find("Nome Amigável")
     if idx != -1:
@@ -68,50 +106,53 @@ def extrair_nome_amigavel(pdf_path):
             return "sem_nome"
     return "sem_nome"
 
-def criar_txt(destino):
+# Criar TXT
+def criar_txt(destino: Path):
     conteudo = "Olá! Este é um arquivo de texto criado com Python."
     with open(destino, "w", encoding="utf-8") as f:
         f.write(conteudo)
     return destino
 
-def zipar_conteudo(nome_zip, arquivos):
-    zip_buffer = BytesIO()
-    with ZipFile(zip_buffer, "w") as zipf:
-        for path in arquivos:
-            zipf.write(path, arcname=Path(path).name)
-    zip_buffer.seek(0)
-    return zip_buffer
+# Upload de extras
+def upload_arquivos_extras(destino_dir: Path) -> list[Path]:
+    uploaded = files.upload()
+    paths = []
+    for fname in uploaded.keys():
+        src = Path("/content") / fname
+        dst = destino_dir / fname
+        shutil.move(str(src), str(dst))
+        paths.append(dst)
+    return paths
 
-# Upload principal
-uploaded_pdf = st.file_uploader("📤 Envie o arquivo PDF", type=["pdf"])
-arquivos_extras = st.file_uploader("📎 Anexar outros arquivos para incluir no .zip (opcional)", type=None, accept_multiple_files=True)
+# Função principal
+def main():
+    pdfs = upload_pdfs(BASE_DIR)
+    if not pdfs:
+        return
 
-if uploaded_pdf and st.button("🚀 Gerar ZIP"):
-    with st.spinner("⏳ Processando o PDF..."):
+    pdf_origem = pdfs[0]
+    arquivos_gerados = processar_pdf(pdf_origem, CONVERTED_DIR)
+    consolidado_path = CONVERTED_DIR / "consolidado_final.xlsx"
+    consolidar_xlsx(arquivos_gerados, consolidado_path)
 
-        pdf_path = salvar_pdf(uploaded_pdf)
-        nome_amigavel = extrair_nome_amigavel(pdf_path)
-        data_hoje = datetime.today().strftime("%Y%m%d")
-        nome_zip = f"{nome_amigavel}_{data_hoje}.zip"
+    txt_path = CONVERTED_DIR / "arquivo_info.txt"
+    criar_txt(txt_path)
 
-        arquivos_excel = processar_pdf(pdf_path, CONVERTED_DIR)
+    arquivos_extras = upload_arquivos_extras(CONVERTED_DIR)
 
-        consolidado_path = CONVERTED_DIR / "consolidado_final.xlsx"
-        consolidar_xlsx(arquivos_excel, consolidado_path)
+    nome_amigavel = extrair_nome_amigavel(pdf_origem)
+    data_str = datetime.today().strftime("%Y%m%d")
+    nome_zip = f"{nome_amigavel}_{data_str}.zip"
+    caminho_zip = BASE_DIR / nome_zip
 
-        txt_path = CONVERTED_DIR / "arquivo_info.txt"
-        criar_txt(txt_path)
+    with ZipFile(caminho_zip, "w") as zipf:
+        zipf.write(pdf_origem, arcname=pdf_origem.name)
+        zipf.write(consolidado_path, arcname=consolidado_path.name)
+        zipf.write(txt_path, arcname=txt_path.name)
+        for arq in arquivos_extras:
+            zipf.write(arq, arcname=arq.name)
 
-        paths_para_zip = [pdf_path, consolidado_path, txt_path]
+    files.download(str(caminho_zip))
 
-        if arquivos_extras:
-            for arq in arquivos_extras:
-                extra_path = CONVERTED_DIR / arq.name
-                with open(extra_path, "wb") as f:
-                    f.write(arq.getbuffer())
-                paths_para_zip.append(extra_path)
-
-        buffer_zip = zipar_conteudo(nome_zip, paths_para_zip)
-
-    st.success("✅ ZIP gerado com sucesso!")
-    st.download_button("📦 Baixar ZIP", data=buffer_zip, file_name=nome_zip, mime="application/zip")
+if __name__ == "__main__":
+    main()
