@@ -30,7 +30,7 @@ from pathlib import Path
 import pandas as pd
 import numpy as np
 import pdfplumber
-from tqdm.notebook import tqdm
+#from tqdm.notebook import tqdm
 from datetime import datetime
 from zipfile import ZipFile
 import warnings
@@ -38,7 +38,7 @@ warnings.simplefilter(action='ignore', category=FutureWarning)
 
 import PyPDF2
 from openpyxl import load_workbook
-from google.colab import files
+#from google.colab import files
 
 # Diretórios
 BASE_DIR = Path("/content/sample_pdfs")
